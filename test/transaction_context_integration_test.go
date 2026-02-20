@@ -35,9 +35,9 @@ func (e *TransactionContextEntity) ODataBeforeUpdate(ctx context.Context, _ *htt
 		return fmt.Errorf("transaction not available in context")
 	}
 	hookTransactionObserved = true
-	if err := tx.Model(&TransactionAudit{}).
-		Where("id = ?", e.ID).
-		Update("counter", gorm.Expr("counter + 1")).Error; err != nil {
+	// Update using raw SQL with the *sql.Tx
+	_, err := tx.Exec("UPDATE transaction_audits SET counter = counter + 1 WHERE id = ?", e.ID)
+	if err != nil {
 		return err
 	}
 	return fmt.Errorf("abort update for test")

@@ -63,13 +63,14 @@ type PropertyMetadata struct {
 	Name                      string
 	Type                      reflect.Type
 	FieldName                 string
-	ColumnName                string // Database column name (computed once, respects GORM column: tags)
+	ColumnName                string // Database column name (computed once, respects GORM column: and odata:"column:..." tags)
 	IsKey                     bool
 	KeyGenerator              string
 	DatabaseGenerated         bool
 	IsRequired                bool
 	JsonName                  string
-	GormTag                   string
+	GormTag                   string // DEPRECATED: Use ODataTag instead. Kept for backwards compatibility during migration.
+	ODataTag                  string // OData struct tag (odata:"...") - preferred over GormTag
 	IsNavigationProp          bool
 	NavigationTarget          string // Entity type name for navigation properties
 	NavigationTargetTableName string // Database table name for navigation target (computed once)
@@ -355,6 +356,7 @@ func analyzeField(field reflect.StructField, metadata *EntityMetadata) (Property
 		FieldName: field.Name,
 		JsonName:  getJsonName(field),
 		GormTag:   field.Tag.Get("gorm"),
+		ODataTag:  field.Tag.Get("odata"),
 	}
 
 	// Check if this is a navigation property
@@ -425,26 +427,37 @@ func analyzeNavigationProperty(property *PropertyMetadata, field reflect.StructF
 	// If it's a struct type, determine if it's navigation property or complex type
 	if fieldType.Kind() == reflect.Struct {
 		gormTag := field.Tag.Get("gorm")
+		odataTag := field.Tag.Get("odata")
 
-		// Check if it's a navigation property (has foreign key, references, or many2many)
-		if strings.Contains(gormTag, "foreignKey") || strings.Contains(gormTag, "references") || strings.Contains(gormTag, "many2many") {
+		// Check if it's a navigation property (has foreign key, references, or many2many in either tag)
+		hasNavInGorm := strings.Contains(gormTag, "foreignKey") || strings.Contains(gormTag, "references") || strings.Contains(gormTag, "many2many")
+		hasNavInOData := strings.Contains(odataTag, "foreignKey:") || strings.Contains(odataTag, "references:") || strings.Contains(odataTag, "many2many:")
+
+		if hasNavInGorm || hasNavInOData {
 			property.IsNavigationProp = true
 			property.NavigationTarget = fieldType.Name()
 			// Use fieldType (already dereferenced) to get the table name for the target entity
 			property.NavigationTargetTableName = getTableNameFromReflectType(fieldType)
 			property.NavigationIsArray = isSlice
 
-			// Compute and cache the foreign key column name (respects GORM foreignKey: tags)
+			// Compute and cache the foreign key column name (respects both GORM and OData tags)
 			property.ForeignKeyColumnName = getForeignKeyColumnName(property)
 
-			// Extract referential constraints from GORM tags (only for foreignKey/references)
-			if strings.Contains(gormTag, "foreignKey") || strings.Contains(gormTag, "references") {
+			// Extract referential constraints from tags (prefer odata, fallback to gorm)
+			if hasNavInOData {
+				property.ReferentialConstraints = extractReferentialConstraintsFromOData(odataTag)
+			} else if hasNavInGorm {
 				property.ReferentialConstraints = extractReferentialConstraints(gormTag)
 			}
-		} else if strings.Contains(gormTag, "embedded") {
+		} else if strings.Contains(gormTag, "embedded") || strings.Contains(odataTag, "embedded") {
 			// It's a complex type (embedded struct without foreign keys)
 			property.IsComplexType = true
-			property.EmbeddedPrefix = extractEmbeddedPrefix(gormTag)
+			// Prefer odata tag for embedded prefix, fallback to gorm
+			if strings.Contains(odataTag, "embeddedPrefix:") {
+				property.EmbeddedPrefix = extractEmbeddedPrefixFromTag(odataTag, "embeddedPrefix:")
+			} else {
+				property.EmbeddedPrefix = extractEmbeddedPrefix(gormTag)
+			}
 			analyzeComplexTypeFields(property, fieldType)
 		}
 	}
@@ -478,6 +491,7 @@ func analyzeComplexTypeFields(property *PropertyMetadata, fieldType reflect.Type
 			FieldName: field.Name,
 			JsonName:  getJsonName(field),
 			GormTag:   field.Tag.Get("gorm"),
+			ODataTag:  field.Tag.Get("odata"),
 		}
 
 		analyzeNavigationProperty(&nestedProp, field)
@@ -486,7 +500,12 @@ func analyzeComplexTypeFields(property *PropertyMetadata, fieldType reflect.Type
 		nestedProp.ColumnName = getColumnNameFromProperty(&nestedProp)
 
 		if nestedProp.IsComplexType {
-			nestedProp.EmbeddedPrefix = extractEmbeddedPrefix(nestedProp.GormTag)
+			// Prefer odata tag for embedded prefix, fallback to gorm
+			if strings.Contains(nestedProp.ODataTag, "embeddedPrefix:") {
+				nestedProp.EmbeddedPrefix = extractEmbeddedPrefixFromTag(nestedProp.ODataTag, "embeddedPrefix:")
+			} else {
+				nestedProp.EmbeddedPrefix = extractEmbeddedPrefix(nestedProp.GormTag)
+			}
 			analyzeComplexTypeFields(&nestedProp, field.Type)
 		}
 
@@ -538,6 +557,47 @@ func extractEmbeddedPrefix(gormTag string) string {
 		part = strings.TrimSpace(part)
 		if strings.HasPrefix(part, "embeddedPrefix:") {
 			return strings.TrimPrefix(part, "embeddedPrefix:")
+		}
+	}
+	return ""
+}
+
+// extractReferentialConstraintsFromOData extracts referential constraints from OData tags
+// Format: odata:"foreignKey:UserID,references:ID" or odata:"foreignKey:UserID" (references defaults to "ID")
+func extractReferentialConstraintsFromOData(odataTag string) map[string]string {
+	constraints := make(map[string]string)
+
+	// Parse foreignKey and references from odata tag
+	var foreignKey, references string
+
+	parts := strings.Split(odataTag, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "foreignKey:") {
+			foreignKey = strings.TrimPrefix(part, "foreignKey:")
+		} else if strings.HasPrefix(part, "references:") {
+			references = strings.TrimPrefix(part, "references:")
+		}
+	}
+
+	// If foreignKey is specified but references is not, default to "ID"
+	if foreignKey != "" {
+		if references == "" {
+			references = "ID"
+		}
+		constraints[foreignKey] = references
+	}
+
+	return constraints
+}
+
+// extractEmbeddedPrefixFromTag extracts the embedded prefix from a tag with specified prefix
+func extractEmbeddedPrefixFromTag(tag, prefix string) string {
+	parts := strings.Split(tag, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, prefix) {
+			return strings.TrimPrefix(part, prefix)
 		}
 	}
 	return ""
@@ -656,6 +716,27 @@ func processODataTagPart(property *PropertyMetadata, part string, metadata *Enti
 			property.Annotations = NewAnnotationCollection()
 		}
 		property.Annotations.Add(annotation)
+	// New tags for migration support
+	case strings.HasPrefix(part, "column:"):
+		// Column name override - will be used by getColumnNameFromProperty
+		// Store in a temporary location or handle in getColumnNameFromProperty
+	case part == "autoincrement":
+		// Marker for auto-increment (handled in isDatabaseGeneratedKey)
+	case part == "autoincrement:false":
+		// Explicit disable of auto-increment (handled in isDatabaseGeneratedKey)
+	case strings.HasPrefix(part, "foreignKey:"):
+		// Foreign key specification (handled in analyzeNavigationProperty)
+	case strings.HasPrefix(part, "references:"):
+		// References specification (handled in analyzeNavigationProperty)
+	case strings.HasPrefix(part, "many2many:"):
+		// Many-to-many specification (handled in analyzeNavigationProperty)
+	case part == "embedded":
+		// Embedded marker (handled in analyzeNavigationProperty)
+	case strings.HasPrefix(part, "embeddedPrefix:"):
+		// Embedded prefix (handled in analyzeNavigationProperty)
+	case strings.HasPrefix(part, "default:"):
+		// Alternative syntax for default value
+		property.DefaultValue = strings.TrimPrefix(part, "default:")
 	}
 
 	return nil
@@ -719,8 +800,12 @@ func isDatabaseGeneratedKey(property PropertyMetadata) bool {
 		return false
 	}
 
+	// Check OData tag first, then fallback to GORM tag
+	odataTag := strings.ToLower(property.ODataTag)
 	gormTag := strings.ToLower(property.GormTag)
-	if strings.Contains(gormTag, "autoincrement:false") {
+
+	// Check for explicit autoincrement:false in either tag
+	if strings.Contains(odataTag, "autoincrement:false") || strings.Contains(gormTag, "autoincrement:false") {
 		return false
 	}
 
@@ -733,7 +818,8 @@ func isDatabaseGeneratedKey(property PropertyMetadata) bool {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return true
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return strings.Contains(gormTag, "autoincrement")
+		// Check for explicit autoincrement in either tag
+		return strings.Contains(odataTag, "autoincrement") || strings.Contains(gormTag, "autoincrement")
 	default:
 		return false
 	}
@@ -1401,13 +1487,24 @@ func getTableNameFromReflectType(entityType reflect.Type) string {
 }
 
 // getColumnNameFromProperty computes the database column name for a property
-// This respects GORM column: tags and falls back to snake_case conversion
+// This respects OData column: tags (preferred) and GORM column: tags, then falls back to snake_case conversion
 func getColumnNameFromProperty(prop *PropertyMetadata) string {
 	if prop == nil {
 		return ""
 	}
 
-	// Check GORM tag for explicit column name
+	// Check OData tag for explicit column name (preferred)
+	if prop.ODataTag != "" {
+		parts := strings.Split(prop.ODataTag, ",")
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "column:") {
+				return strings.TrimPrefix(part, "column:")
+			}
+		}
+	}
+
+	// Check GORM tag for explicit column name (backwards compatibility)
 	if prop.GormTag != "" {
 		parts := strings.Split(prop.GormTag, ";")
 		for _, part := range parts {
@@ -1423,13 +1520,31 @@ func getColumnNameFromProperty(prop *PropertyMetadata) string {
 }
 
 // getForeignKeyColumnName computes the foreign key column name for a navigation property
-// This respects GORM foreignKey: tags and falls back to <navigation_property_name>_id convention
+// This respects OData foreignKey: tags (preferred) and GORM foreignKey: tags, then falls back to <navigation_property_name>_id convention
 func getForeignKeyColumnName(prop *PropertyMetadata) string {
 	if prop == nil || !prop.IsNavigationProp {
 		return ""
 	}
 
-	// Check GORM tag for explicit foreignKey
+	// Check OData tag for explicit foreignKey (preferred)
+	if prop.ODataTag != "" {
+		parts := strings.Split(prop.ODataTag, ",")
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if strings.HasPrefix(part, "foreignKey:") {
+				fkField := strings.TrimPrefix(part, "foreignKey:")
+				// For composite keys, handle comma-separated field names
+				fkFields := strings.Split(fkField, ",")
+				snakeCaseFields := make([]string, len(fkFields))
+				for i, field := range fkFields {
+					snakeCaseFields[i] = toSnakeCase(strings.TrimSpace(field))
+				}
+				return strings.Join(snakeCaseFields, ",")
+			}
+		}
+	}
+
+	// Check GORM tag for explicit foreignKey (backwards compatibility)
 	if prop.GormTag != "" {
 		parts := strings.Split(prop.GormTag, ";")
 		for _, part := range parts {

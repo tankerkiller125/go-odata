@@ -31,13 +31,13 @@ package odata
 //
 // Implement any of these methods to customize query behavior and response data:
 //
-//	func (p Product) ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *odata.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error)
+//	func (p Product) ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *odata.QueryOptions) ([]odata.QueryScope, error)
 //	func (p Product) ODataAfterReadCollection(ctx context.Context, r *http.Request, opts *odata.QueryOptions, results interface{}) (interface{}, error)
-//	func (p Product) ODataBeforeReadEntity(ctx context.Context, r *http.Request, opts *odata.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error)
+//	func (p Product) ODataBeforeReadEntity(ctx context.Context, r *http.Request, opts *odata.QueryOptions) ([]odata.QueryScope, error)
 //	func (p Product) ODataAfterReadEntity(ctx context.Context, r *http.Request, opts *odata.QueryOptions, entity interface{}) (interface{}, error)
 //
-// Before* read hooks return GORM scopes that are applied before OData query options
-// ($filter, $orderby, $top, $skip). Use them for authorization filters and eager-loading.
+// Before* read hooks return QueryScope values that represent SQL conditions applied before OData query options
+// ($filter, $orderby, $top, $skip). Use them for authorization filters.
 // After* read hooks receive the final results after all query processing and can redact
 // sensitive data or append computed fields.
 //
@@ -48,6 +48,7 @@ package odata
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -74,6 +75,29 @@ import (
 
 // KeyGenerator describes a function that produces a key value for new entities.
 type KeyGenerator func(context.Context) (interface{}, error)
+
+// QueryScope represents a SQL condition that can be added to a query.
+// It carries a raw SQL predicate and its arguments for safe parameter binding.
+// Use QueryScope in Before*Read hooks to apply authorization filters or other
+// conditions that should be evaluated before OData query options like $filter.
+//
+// During the migration from GORM to database/sql, QueryScope replaces the previous
+// []func(*gorm.DB) *gorm.DB pattern for a database-agnostic approach.
+//
+// # Example
+//
+//	func (p Product) ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *odata.QueryOptions) ([]odata.QueryScope, error) {
+//	    tenantID := getTenantFromContext(ctx)
+//	    return []odata.QueryScope{
+//	        {Condition: "tenant_id = ?", Args: []interface{}{tenantID}},
+//	    }, nil
+//	}
+type QueryScope struct {
+	// Condition is the SQL WHERE clause condition (e.g., "tenant_id = ?")
+	Condition string
+	// Args contains the parameter values for placeholders in Condition
+	Args []interface{}
+}
 
 // PreRequestHook is called before each request is processed, including batch sub-requests.
 // It allows injecting custom logic such as authentication, context enrichment, or logging.
@@ -177,7 +201,7 @@ type PreRequestHook func(r *http.Request) (context.Context, error)
 //
 // # Accessing the Transaction
 //
-// Write hooks (Before/After Create/Update/Delete) execute inside a shared GORM transaction.
+// Write hooks (Before/After Create/Update/Delete) execute inside a shared database transaction.
 // Use TransactionFromContext to participate in the same transaction:
 //
 //	func (p *Product) ODataBeforeCreate(ctx context.Context, r *http.Request) error {
@@ -186,8 +210,10 @@ type PreRequestHook func(r *http.Request) (context.Context, error)
 //	        return fmt.Errorf("transaction unavailable")
 //	    }
 //
+//	    // Use the transaction to perform additional database operations
 //	    audit := AuditLog{ProductID: p.ID, Action: "CREATE"}
-//	    if err := tx.Create(&audit).Error; err != nil {
+//	    _, err := tx.Exec("INSERT INTO audit_log (product_id, action) VALUES (?, ?)", audit.ProductID, audit.Action)
+//	    if err != nil {
 //	        return err
 //	    }
 //	    return nil
@@ -232,23 +258,23 @@ type EntityHook interface {
 //
 // # Before Read Hooks
 //
-// ODataBeforeReadCollection is called before fetching a collection. It returns GORM scopes
-// that are applied before OData query options ($filter, $orderby, $top, $skip).
+// ODataBeforeReadCollection is called before fetching a collection. It returns QueryScope
+// values that represent SQL conditions applied before OData query options ($filter, $orderby, $top, $skip).
 //
-//	func (p Product) ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *odata.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
+//	func (p Product) ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *odata.QueryOptions) ([]odata.QueryScope, error) {
 //	    // Apply tenant filter
 //	    tenantID := r.Header.Get("X-Tenant-ID")
 //	    if tenantID == "" {
 //	        return nil, fmt.Errorf("missing tenant header")
 //	    }
-//	    return []func(*gorm.DB) *gorm.DB{
-//	        func(db *gorm.DB) *gorm.DB { return db.Where("tenant_id = ?", tenantID) },
+//	    return []odata.QueryScope{
+//	        {Condition: "tenant_id = ?", Args: []interface{}{tenantID}},
 //	    }, nil
 //	}
 //
 // ODataBeforeReadEntity is called before fetching a single entity. It works the same as
-// ODataBeforeReadCollection but for individual entity reads. Return scopes for authorization
-// filters or eager-loading related data.
+// ODataBeforeReadCollection but for individual entity reads. Return QueryScope values for authorization
+// filters or other pre-conditions.
 //
 // # After Read Hooks
 //
@@ -283,9 +309,9 @@ type EntityHook interface {
 //	Read:   ODataBeforeReadCollection/ODataBeforeReadEntity -> SELECT + OData options -> ODataAfterReadCollection/ODataAfterReadEntity
 type ReadHook interface {
 	// ODataBeforeReadCollection is called before fetching a collection.
-	// Return GORM scopes to apply before OData options ($filter, $orderby, etc).
-	// These scopes are ideal for authorization filters and eager-loading.
-	ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *QueryOptions) ([]func(*gorm.DB) *gorm.DB, error)
+	// Return QueryScope values to apply SQL conditions before OData options ($filter, $orderby, etc).
+	// These scopes are ideal for authorization filters.
+	ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *QueryOptions) ([]QueryScope, error)
 
 	// ODataAfterReadCollection is called after fetching a collection.
 	// It receives the results after all query processing and can redact or transform them.
@@ -293,13 +319,56 @@ type ReadHook interface {
 	ODataAfterReadCollection(ctx context.Context, r *http.Request, opts *QueryOptions, results interface{}) (interface{}, error)
 
 	// ODataBeforeReadEntity is called before fetching a single entity.
-	// Return GORM scopes to apply before OData options. Ideal for authorization and eager-loading.
-	ODataBeforeReadEntity(ctx context.Context, r *http.Request, opts *QueryOptions) ([]func(*gorm.DB) *gorm.DB, error)
+	// Return QueryScope values to apply SQL conditions before OData options. Ideal for authorization.
+	ODataBeforeReadEntity(ctx context.Context, r *http.Request, opts *QueryOptions) ([]QueryScope, error)
 
 	// ODataAfterReadEntity is called after fetching a single entity.
 	// It receives the entity after all query processing and can redact or transform it.
 	// Return nil, nil to keep the original response.
 	ODataAfterReadEntity(ctx context.Context, r *http.Request, opts *QueryOptions, entity interface{}) (interface{}, error)
+}
+
+// EntAdapter wraps a database/sql connection with dialect information.
+// This adapter will replace *gorm.DB throughout the library during the migration
+// to database/sql, providing a database-agnostic interface for query execution.
+//
+// TEMPORARY: During Phase 1 of the migration, NewService still accepts *gorm.DB
+// for backwards compatibility. This will change in Phase 2 when all internal
+// query code is migrated to use database/sql directly.
+type EntAdapter struct {
+	// DB is the underlying database/sql connection
+	DB *sql.DB
+	// Dialect identifies the database type (e.g., "postgres", "mysql", "sqlite3")
+	Dialect string
+	// gormDB is kept temporarily during migration for backwards compatibility
+	gormDB *gorm.DB
+}
+
+// NewEntAdapter creates an EntAdapter from a GORM database connection.
+// This is a temporary helper during the migration phase. In Phase 2, this will
+// be replaced with a function that accepts *sql.DB directly.
+//
+// DEPRECATED: This function is temporary and will be replaced in Phase 2 of the migration.
+func NewEntAdapter(db *gorm.DB) (*EntAdapter, error) {
+	if db == nil {
+		return nil, fmt.Errorf("odata: database handle is required")
+	}
+
+	// Extract the underlying *sql.DB from GORM
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("odata: failed to get sql.DB from gorm: %w", err)
+	}
+
+	// Get the dialect name from GORM
+	dialector := db.Dialector
+	dialect := dialector.Name()
+
+	return &EntAdapter{
+		DB:      sqlDB,
+		Dialect: dialect,
+		gormDB:  db, // Keep GORM reference temporarily during migration
+	}, nil
 }
 
 // ServiceConfig controls optional service behaviours.
@@ -340,8 +409,13 @@ const (
 
 // Service represents an OData service that can handle multiple entities.
 type Service struct {
-	// db holds the GORM database connection
-	db *gorm.DB
+	// db holds the database/sql connection (migrated from GORM)
+	db *sql.DB
+	// dialect identifies the database type (e.g., "postgres", "mysql", "sqlite3")
+	dialect string
+	// gormDB is kept temporarily during migration for backwards compatibility with internal handlers
+	// DEPRECATED: This will be removed in Phase 2 of the migration
+	gormDB *gorm.DB
 	// entities holds registered entity metadata keyed by entity set name
 	entities map[string]*metadata.EntityMetadata
 	// entityContainerAnnotations holds annotations applied to the entity container
@@ -410,16 +484,46 @@ type Service struct {
 }
 
 // NewService creates a new OData service instance with database connection.
+// DEPRECATED: Use NewServiceWithAdapter instead. This function is kept for backwards
+// compatibility during the migration from GORM to database/sql.
 func NewService(db *gorm.DB) (*Service, error) {
 	return NewServiceWithConfig(db, ServiceConfig{})
 }
 
 // NewServiceWithConfig creates a new OData service instance with additional configuration.
+// DEPRECATED: Use NewServiceWithConfigAndAdapter instead. This function is kept for backwards
+// compatibility during the migration from GORM to database/sql.
 func NewServiceWithConfig(db *gorm.DB, cfg ServiceConfig) (*Service, error) {
 	if db == nil {
 		return nil, fmt.Errorf("odata: database handle is required")
 	}
 
+	// Create an EntAdapter from the GORM database
+	adapter, err := NewEntAdapter(db)
+	if err != nil {
+		return nil, err
+	}
+
+	return newServiceInternal(adapter, cfg)
+}
+
+// NewServiceWithAdapter creates a new OData service instance with an EntAdapter.
+// This is the new preferred API for creating services during the migration.
+func NewServiceWithAdapter(adapter *EntAdapter) (*Service, error) {
+	return NewServiceWithConfigAndAdapter(adapter, ServiceConfig{})
+}
+
+// NewServiceWithConfigAndAdapter creates a new OData service instance with an EntAdapter and configuration.
+// This is the new preferred API for creating services during the migration.
+func NewServiceWithConfigAndAdapter(adapter *EntAdapter, cfg ServiceConfig) (*Service, error) {
+	if adapter == nil {
+		return nil, fmt.Errorf("odata: adapter is required")
+	}
+	return newServiceInternal(adapter, cfg)
+}
+
+// newServiceInternal is the internal service initialization function used by all constructors.
+func newServiceInternal(adapter *EntAdapter, cfg ServiceConfig) (*Service, error) {
 	entities := make(map[string]*metadata.EntityMetadata)
 	handlersMap := make(map[string]*handlers.EntityHandler)
 	logger := slog.Default()
@@ -429,7 +533,8 @@ func NewServiceWithConfig(db *gorm.DB, cfg ServiceConfig) (*Service, error) {
 		err     error
 	)
 	if cfg.PersistentChangeTracking {
-		tracker, err = trackchanges.NewTrackerWithDB(db)
+		// Use GORM temporarily for persistent tracking during migration
+		tracker, err = trackchanges.NewTrackerWithDB(adapter.gormDB)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize persistent change tracker: %w", err)
 		}
@@ -440,8 +545,8 @@ func NewServiceWithConfig(db *gorm.DB, cfg ServiceConfig) (*Service, error) {
 		}
 	}
 
-	// Initialize FTS manager for SQLite full-text search
-	ftsManager := query.NewFTSManager(db)
+	// Initialize FTS manager for SQLite full-text search (uses GORM temporarily)
+	ftsManager := query.NewFTSManager(adapter.gormDB)
 
 	// Set defaults for security limits if not specified or negative
 	maxInClauseSize := cfg.MaxInClauseSize
@@ -458,7 +563,9 @@ func NewServiceWithConfig(db *gorm.DB, cfg ServiceConfig) (*Service, error) {
 	}
 
 	s := &Service{
-		db:                         db,
+		db:                         adapter.DB,
+		dialect:                    adapter.Dialect,
+		gormDB:                     adapter.gormDB, // Temporary during migration
 		entities:                   entities,
 		entityContainerAnnotations: metadata.NewAnnotationCollection(),
 		handlers:                   handlersMap,
@@ -482,7 +589,8 @@ func NewServiceWithConfig(db *gorm.DB, cfg ServiceConfig) (*Service, error) {
 	s.serviceDocumentHandler.SetPolicy(s.policy)
 	s.operationsHandler = operations.NewHandler(s.actions, s.functions, s.handlers, s.entities, s.namespace, logger)
 	// Initialize batch handler with reference to service's internal handler (for changesets)
-	s.batchHandler = handlers.NewBatchHandler(db, handlersMap, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// Use GORM temporarily during migration
+	s.batchHandler = handlers.NewBatchHandler(adapter.gormDB, handlersMap, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.serveHTTP(w, r, false)
 	}), maxBatchSize)
 	s.router = servrouter.NewRouter(
@@ -673,15 +781,17 @@ func (s *Service) SetObservability(cfg ObservabilityConfig) error {
 	}
 
 	// Register GORM callbacks for detailed DB tracing if enabled
+	// TEMPORARY: Use gormDB during migration
 	if cfg.EnableDetailedDBTracing {
-		if err := observability.RegisterGORMCallbacks(s.db, obsCfg); err != nil {
+		if err := observability.RegisterGORMCallbacks(s.gormDB, obsCfg); err != nil {
 			return fmt.Errorf("failed to register GORM callbacks: %w", err)
 		}
 	}
 
 	// Register GORM callbacks for server timing if enabled
+	// TEMPORARY: Use gormDB during migration
 	if cfg.EnableServerTiming {
-		if err := observability.RegisterServerTimingCallbacks(s.db); err != nil {
+		if err := observability.RegisterServerTimingCallbacks(s.gormDB); err != nil {
 			return fmt.Errorf("failed to register server timing callbacks: %w", err)
 		}
 	}
@@ -788,7 +898,8 @@ func (s *Service) EnableAsyncProcessing(cfg AsyncConfig) error {
 		managerOptions = append(managerOptions, async.WithRetentionDisabled())
 	}
 
-	mgr, err := async.NewManager(s.db, normalized.JobRetention, managerOptions...)
+	// TEMPORARY: Use gormDB during migration
+	mgr, err := async.NewManager(s.gormDB, normalized.JobRetention, managerOptions...)
 	if err != nil {
 		return fmt.Errorf("failed to configure async processing: %w", err)
 	}
@@ -957,7 +1068,7 @@ func (s *Service) RegisterEntity(entity interface{}) error {
 	}
 
 	// Create and store the handler
-	handler := handlers.NewEntityHandler(s.db, entityMetadata, s.logger)
+	handler := handlers.NewEntityHandler(s.gormDB, entityMetadata, s.logger)
 	handler.SetNamespace(s.namespace)
 	handler.SetEntitiesMetadata(s.entities)
 	handler.SetDeltaTracker(s.deltaTracker)
@@ -1039,7 +1150,7 @@ func (s *Service) RegisterSingleton(entity interface{}, singletonName string) er
 	}
 
 	// Create and store the handler (same handler type works for both entities and singletons)
-	handler := handlers.NewEntityHandler(s.db, singletonMetadata, s.logger)
+	handler := handlers.NewEntityHandler(s.gormDB, singletonMetadata, s.logger)
 	handler.SetNamespace(s.namespace)
 	handler.SetEntitiesMetadata(s.entities)
 	handler.SetFTSManager(s.ftsManager)
@@ -1126,7 +1237,7 @@ func (s *Service) RegisterVirtualEntity(entity interface{}) error {
 	}
 
 	// Create and store the handler (no database operations will be performed)
-	handler := handlers.NewEntityHandler(s.db, entityMetadata, s.logger)
+	handler := handlers.NewEntityHandler(s.gormDB, entityMetadata, s.logger)
 	handler.SetNamespace(s.namespace)
 	handler.SetEntitiesMetadata(s.entities)
 	handler.SetFTSManager(s.ftsManager)

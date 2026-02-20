@@ -30,7 +30,8 @@ func (s *Service) EnableGeospatial() error {
 	s.logger.Info("Enabling geospatial features")
 
 	// Check if database supports geospatial features
-	if err := checkGeospatialSupport(s.db, s.logger); err != nil {
+	// TEMPORARY: Use gormDB during migration
+	if err := checkGeospatialSupport(s.gormDB, s.logger); err != nil {
 		s.logger.Error("Failed to enable geospatial features", "error", err)
 		return fmt.Errorf("geospatial features cannot be enabled: %w", err)
 	}
