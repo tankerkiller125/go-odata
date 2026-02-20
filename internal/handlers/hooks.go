@@ -6,7 +6,7 @@ import (
 
 	"github.com/nlstn/go-odata/internal/metadata"
 	"github.com/nlstn/go-odata/internal/query"
-	"gorm.io/gorm"
+	"github.com/nlstn/go-odata/internal/scope"
 )
 
 // callBeforeCreate calls the ODataBeforeCreate hook if it exists on the entity
@@ -110,7 +110,7 @@ func callHook(entity interface{}, methodName string, r *http.Request) error {
 }
 
 // callBeforeReadCollection invokes the ODataBeforeReadCollection hook if defined and returns any scopes it produces.
-func callBeforeReadCollection(meta *metadata.EntityMetadata, r *http.Request, opts *query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
+func callBeforeReadCollection(meta *metadata.EntityMetadata, r *http.Request, opts *query.QueryOptions) ([]scope.QueryScope, error) {
 	if meta == nil || !meta.Hooks.HasODataBeforeReadCollection {
 		return nil, nil
 	}
@@ -121,9 +121,9 @@ func callBeforeReadCollection(meta *metadata.EntityMetadata, r *http.Request, op
 		return nil, nil
 	}
 
-	var scopes []func(*gorm.DB) *gorm.DB
+	var scopes []scope.QueryScope
 	if first := results[0]; first.IsValid() && (first.Kind() != reflect.Interface || !first.IsNil()) {
-		if s, ok := first.Interface().([]func(*gorm.DB) *gorm.DB); ok {
+		if s, ok := first.Interface().([]scope.QueryScope); ok {
 			scopes = s
 		}
 	}
@@ -174,7 +174,7 @@ func callAfterReadCollection(meta *metadata.EntityMetadata, r *http.Request, opt
 }
 
 // callBeforeReadEntity invokes the ODataBeforeReadEntity hook if defined and returns any scopes it produces.
-func callBeforeReadEntity(meta *metadata.EntityMetadata, r *http.Request, opts *query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
+func callBeforeReadEntity(meta *metadata.EntityMetadata, r *http.Request, opts *query.QueryOptions) ([]scope.QueryScope, error) {
 	if meta == nil || !meta.Hooks.HasODataBeforeReadEntity {
 		return nil, nil
 	}
@@ -185,9 +185,9 @@ func callBeforeReadEntity(meta *metadata.EntityMetadata, r *http.Request, opts *
 		return nil, nil
 	}
 
-	var scopes []func(*gorm.DB) *gorm.DB
+	var scopes []scope.QueryScope
 	if first := results[0]; first.IsValid() && (first.Kind() != reflect.Interface || !first.IsNil()) {
-		if s, ok := first.Interface().([]func(*gorm.DB) *gorm.DB); ok {
+		if s, ok := first.Interface().([]scope.QueryScope); ok {
 			scopes = s
 		}
 	}

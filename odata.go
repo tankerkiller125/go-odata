@@ -64,6 +64,7 @@ import (
 	"github.com/nlstn/go-odata/internal/metadata"
 	"github.com/nlstn/go-odata/internal/observability"
 	"github.com/nlstn/go-odata/internal/query"
+	"github.com/nlstn/go-odata/internal/scope"
 	"github.com/nlstn/go-odata/internal/service/operations"
 	servrouter "github.com/nlstn/go-odata/internal/service/router"
 	servruntime "github.com/nlstn/go-odata/internal/service/runtime"
@@ -92,12 +93,7 @@ type KeyGenerator func(context.Context) (interface{}, error)
 //	        {Condition: "tenant_id = ?", Args: []interface{}{tenantID}},
 //	    }, nil
 //	}
-type QueryScope struct {
-	// Condition is the SQL WHERE clause condition (e.g., "tenant_id = ?")
-	Condition string
-	// Args contains the parameter values for placeholders in Condition
-	Args []interface{}
-}
+type QueryScope = scope.QueryScope
 
 // PreRequestHook is called before each request is processed, including batch sub-requests.
 // It allows injecting custom logic such as authentication, context enrichment, or logging.

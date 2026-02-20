@@ -95,8 +95,11 @@ func (h *EntityHandler) handleGetEntity(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Convert scope.QueryScope to GORM scopes
+	gormScopes := convertScopesToGORM(scopes)
+
 	// Fetch the entity
-	result, err := h.fetchEntityByKey(ctx, entityKey, queryOptions, scopes)
+	result, err := h.fetchEntityByKey(ctx, entityKey, queryOptions, gormScopes)
 	if err != nil {
 		h.handleFetchError(w, r, err, entityKey)
 		return
@@ -228,6 +231,9 @@ func (h *EntityHandler) HandleEntityRef(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Convert scope.QueryScope to GORM scopes
+	gormRefScopes := convertScopesToGORM(refScopes)
+
 	// Fetch the entity to ensure it exists
 	entity := reflect.New(h.metadata.EntityType).Interface()
 	db, err := h.buildKeyQuery(h.db.WithContext(ctx), entityKey)
@@ -237,8 +243,8 @@ func (h *EntityHandler) HandleEntityRef(w http.ResponseWriter, r *http.Request, 
 		}
 		return
 	}
-	if len(refScopes) > 0 {
-		db = db.Scopes(refScopes...)
+	if len(gormRefScopes) > 0 {
+		db = db.Scopes(gormRefScopes...)
 	}
 
 	if err := db.First(entity).Error; err != nil {
@@ -316,14 +322,17 @@ func (h *EntityHandler) HandleCollectionRef(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Convert scope.QueryScope to GORM scopes
+	gormScopes := convertScopesToGORM(scopes)
+	
 	// Get the total count if $count=true is specified
-	totalCount := h.getTotalCount(ctx, queryOptions, w, r, scopes)
+	totalCount := h.getTotalCount(ctx, queryOptions, w, r, gormScopes)
 	if totalCount == nil && queryOptions.Count {
 		return // Error already written
 	}
 
 	// Fetch the results
-	results, err := h.fetchResults(ctx, queryOptions, scopes)
+	results, err := h.fetchResults(ctx, queryOptions, gormScopes)
 	if err != nil {
 		h.writeDatabaseError(w, r, err)
 		return

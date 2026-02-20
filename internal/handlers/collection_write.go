@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -90,7 +91,7 @@ func (h *EntityHandler) handlePostEntity(w http.ResponseWriter, r *http.Request)
 	}
 
 	var changeEvents []changeEvent
-	if err := h.runInTransaction(ctx, r, func(tx *gorm.DB, hookReq *http.Request) error {
+	if err := h.runInTransaction(ctx, r, func(sqlTx *sql.Tx, tx *gorm.DB, hookReq *http.Request) error {
 		pendingBindings, err := h.processODataBindAnnotations(ctx, entity, requestData, tx)
 		if err != nil {
 			WriteError(w, r, http.StatusBadRequest, "Invalid @odata.bind annotation", err.Error())
@@ -207,7 +208,7 @@ func (h *EntityHandler) handlePostMediaEntity(w http.ResponseWriter, r *http.Req
 	}
 
 	var changeEvents []changeEvent
-	if err := h.runInTransaction(ctx, r, func(tx *gorm.DB, hookReq *http.Request) error {
+	if err := h.runInTransaction(ctx, r, func(sqlTx *sql.Tx, tx *gorm.DB, hookReq *http.Request) error {
 		if err := h.callBeforeCreate(entity, hookReq); err != nil {
 			if writeErr := response.WriteError(w, r, http.StatusForbidden, "Authorization failed", err.Error()); writeErr != nil {
 				h.logger.Error("Error writing error response", "error", writeErr)

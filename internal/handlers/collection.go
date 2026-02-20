@@ -100,7 +100,10 @@ func (h *EntityHandler) handleGetCount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	count, countErr := h.countEntities(r.Context(), queryOptions, scopes)
+	// Convert scope.QueryScope to GORM scopes
+	gormScopes := convertScopesToGORM(scopes)
+	
+	count, countErr := h.countEntities(r.Context(), queryOptions, gormScopes)
 	if countErr != nil {
 		WriteError(w, r, http.StatusInternalServerError, ErrMsgDatabaseError, countErr.Error())
 		return

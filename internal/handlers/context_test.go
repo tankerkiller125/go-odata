@@ -2,13 +2,13 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/nlstn/go-odata/internal/trackchanges"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestWithTypeCast(t *testing.T) {
@@ -42,22 +42,29 @@ func TestGetTypeCast_NilContext(t *testing.T) {
 }
 
 func TestWithTransaction(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
+	defer db.Close()
+
+	sqlTx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer sqlTx.Rollback()
 
 	ctx := context.Background()
 
 	// Add transaction to context
-	newCtx := withTransaction(ctx, db)
+	newCtx := withTransaction(ctx, sqlTx)
 
 	// Verify transaction can be retrieved
-	tx, ok := TransactionFromContext(newCtx)
+	retrievedTx, ok := TransactionFromContext(newCtx)
 	if !ok {
 		t.Error("TransactionFromContext() should return true")
 	}
-	if tx == nil {
+	if retrievedTx == nil {
 		t.Error("TransactionFromContext() should return non-nil transaction")
 	}
 }
@@ -92,82 +99,110 @@ func TestTransactionFromContext_NilContext(t *testing.T) {
 }
 
 func TestWithTransactionAndEvents(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
 
 	events := &[]pendingChangeEvent{}
 
 	// Test with background context - withTransactionAndEvents handles nil context internally
-	newCtx := withTransactionAndEvents(context.Background(), db, events)
+	newCtx := withTransactionAndEvents(context.Background(), tx, events)
 	if newCtx == nil {
 		t.Error("withTransactionAndEvents() should return non-nil context")
 	}
 
 	// Verify transaction is accessible
-	tx, ok := TransactionFromContext(newCtx)
+	retrievedTx, ok := TransactionFromContext(newCtx)
 	if !ok {
 		t.Error("TransactionFromContext() should return true")
 	}
-	if tx == nil {
+	if retrievedTx == nil {
 		t.Error("TransactionFromContext() should return non-nil transaction")
 	}
 }
 
 func TestWithTransactionAndEvents_NilEvents(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
 
 	ctx := context.Background()
 
 	// Test with nil events - should still work
-	newCtx := withTransactionAndEvents(ctx, db, nil)
+	newCtx := withTransactionAndEvents(ctx, tx, nil)
 	if newCtx == nil {
 		t.Error("withTransactionAndEvents() should return non-nil context")
 	}
 
 	// Verify transaction is accessible
-	tx, ok := TransactionFromContext(newCtx)
+	retrievedTx, ok := TransactionFromContext(newCtx)
 	if !ok {
 		t.Error("TransactionFromContext() should return true")
 	}
-	if tx == nil {
+	if retrievedTx == nil {
 		t.Error("TransactionFromContext() should return non-nil transaction")
 	}
 }
 
 func TestRequestWithTransaction(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 
 	// Add transaction to request
-	newReq := requestWithTransaction(req, db)
+	newReq := requestWithTransaction(req, tx)
 
 	// Verify transaction can be retrieved from request context
-	tx, ok := TransactionFromContext(newReq.Context())
+	retrievedTx, ok := TransactionFromContext(newReq.Context())
 	if !ok {
 		t.Error("TransactionFromContext() should return true")
 	}
-	if tx == nil {
+	if retrievedTx == nil {
 		t.Error("TransactionFromContext() should return non-nil transaction")
 	}
 }
 
 func TestRequestWithTransaction_NilRequest(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
 
 	// Test with nil request
-	newReq := requestWithTransaction(nil, db)
+	newReq := requestWithTransaction(nil, tx)
 	if newReq != nil {
 		t.Error("requestWithTransaction() should return nil for nil request")
 	}
@@ -198,13 +233,20 @@ func TestAddPendingChangeEvents_NoCollector(t *testing.T) {
 }
 
 func TestAddPendingChangeEvents_WithCollector(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
+	defer db.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
 
 	pending := &[]pendingChangeEvent{}
-	ctx := withTransactionAndEvents(context.Background(), db, pending)
+	ctx := withTransactionAndEvents(context.Background(), tx, pending)
 	handler := &EntityHandler{}
 
 	events := []changeEvent{

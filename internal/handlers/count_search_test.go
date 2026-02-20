@@ -61,7 +61,7 @@ func TestEntityHandlerCountWithSearchFallback(t *testing.T) {
 		t.Fatalf("before read hook failed: %v", hookErr)
 	}
 
-	helperCount, err := handler.countEntities(context.Background(), queryOptions, scopes)
+	helperCount, err := handler.countEntities(context.Background(), queryOptions, convertScopesToGORM(scopes))
 	if err != nil {
 		t.Fatalf("countEntities returned error: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestEntityHandlerCountWithSearchFTS(t *testing.T) {
 		t.Fatalf("before read hook failed: %v", hookErr)
 	}
 
-	helperCount, err := handler.countEntities(context.Background(), queryOptions, scopes)
+	helperCount, err := handler.countEntities(context.Background(), queryOptions, convertScopesToGORM(scopes))
 	if err != nil {
 		t.Fatalf("countEntities returned error: %v", err)
 	}

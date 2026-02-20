@@ -11,6 +11,7 @@ import (
 	"github.com/nlstn/go-odata/internal/metadata"
 	"github.com/nlstn/go-odata/internal/query"
 	"github.com/nlstn/go-odata/internal/response"
+	"github.com/nlstn/go-odata/internal/scope"
 	"gorm.io/gorm"
 )
 
@@ -208,14 +209,17 @@ func (h *EntityHandler) verifyAndFetchParentEntity(w http.ResponseWriter, r *htt
 		return nil, parentHookErr
 	}
 
+	// Convert scope.QueryScope to GORM scopes
+	gormScopes := convertScopesToGORM(parentScopes)
+
 	parent := reflect.New(h.metadata.EntityType).Interface()
 	db, err := h.buildKeyQuery(h.db, entityKey)
 	if err != nil {
 		WriteError(w, r, http.StatusBadRequest, ErrMsgInvalidKey, err.Error())
 		return nil, err
 	}
-	if len(parentScopes) > 0 {
-		db = db.Scopes(parentScopes...)
+	if len(gormScopes) > 0 {
+		db = db.Scopes(gormScopes...)
 	}
 	if err := db.First(parent).Error; err != nil {
 		h.handleFetchError(w, r, err, entityKey)
@@ -273,22 +277,25 @@ func (h *EntityHandler) createNavParseQueryOptions(r *http.Request, targetMetada
 }
 
 // createNavBeforeRead creates the BeforeRead callback for navigation collections
-func (h *EntityHandler) createNavBeforeRead(r *http.Request, targetMetadata *metadata.EntityMetadata) func(*query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
-	return func(queryOptions *query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
+func (h *EntityHandler) createNavBeforeRead(r *http.Request, targetMetadata *metadata.EntityMetadata) func(*query.QueryOptions) ([]scope.QueryScope, error) {
+	return func(queryOptions *query.QueryOptions) ([]scope.QueryScope, error) {
 		return callBeforeReadCollection(targetMetadata, r, queryOptions)
 	}
 }
 
 // createNavCountFunc creates the CountFunc callback for navigation collections
-func (h *EntityHandler) createNavCountFunc(relatedDB *gorm.DB, targetMetadata *metadata.EntityMetadata) func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (*int64, error) {
-	return func(queryOptions *query.QueryOptions, scopes []func(*gorm.DB) *gorm.DB) (*int64, error) {
+func (h *EntityHandler) createNavCountFunc(relatedDB *gorm.DB, targetMetadata *metadata.EntityMetadata) func(*query.QueryOptions, []scope.QueryScope) (*int64, error) {
+	return func(queryOptions *query.QueryOptions, scopes []scope.QueryScope) (*int64, error) {
 		if queryOptions == nil || !queryOptions.Count {
 			return nil, nil
 		}
 
+		// Convert scope.QueryScope to GORM scopes
+		gormScopes := convertScopesToGORM(scopes)
+
 		countDB := relatedDB
-		if len(scopes) > 0 {
-			countDB = countDB.Scopes(scopes...)
+		if len(gormScopes) > 0 {
+			countDB = countDB.Scopes(gormScopes...)
 		}
 
 		filter := queryOptions.Filter
@@ -339,17 +346,20 @@ func (h *EntityHandler) createNavCountFunc(relatedDB *gorm.DB, targetMetadata *m
 }
 
 // createNavFetchFunc creates the FetchFunc callback for navigation collections
-func (h *EntityHandler) createNavFetchFunc(relatedDB *gorm.DB, targetMetadata *metadata.EntityMetadata) func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
-	return func(queryOptions *query.QueryOptions, scopes []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+func (h *EntityHandler) createNavFetchFunc(relatedDB *gorm.DB, targetMetadata *metadata.EntityMetadata) func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
+	return func(queryOptions *query.QueryOptions, scopes []scope.QueryScope) (interface{}, error) {
 		modifiedOptions := *queryOptions
 		if queryOptions.Top != nil {
 			topPlusOne := *queryOptions.Top + 1
 			modifiedOptions.Top = &topPlusOne
 		}
 
+		// Convert scope.QueryScope to GORM scopes
+		gormScopes := convertScopesToGORM(scopes)
+
 		db := relatedDB
-		if len(scopes) > 0 {
-			db = db.Scopes(scopes...)
+		if len(gormScopes) > 0 {
+			db = db.Scopes(gormScopes...)
 		}
 
 		db = query.ApplyQueryOptions(db, &modifiedOptions, targetMetadata, h.logger)

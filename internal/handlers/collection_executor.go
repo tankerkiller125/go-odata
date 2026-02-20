@@ -7,7 +7,7 @@ import (
 	"github.com/nlstn/go-odata/internal/metadata"
 	"github.com/nlstn/go-odata/internal/query"
 	"github.com/nlstn/go-odata/internal/response"
-	"gorm.io/gorm"
+	"github.com/nlstn/go-odata/internal/scope"
 )
 
 // errRequestHandled is used to signal that the request has already been handled
@@ -34,9 +34,9 @@ type collectionExecutionContext struct {
 	Metadata *metadata.EntityMetadata
 
 	ParseQueryOptions func() (*query.QueryOptions, error)
-	BeforeRead        func(*query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error)
-	CountFunc         func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (*int64, error)
-	FetchFunc         func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error)
+	BeforeRead        func(*query.QueryOptions) ([]scope.QueryScope, error)
+	CountFunc         func(*query.QueryOptions, []scope.QueryScope) (*int64, error)
+	FetchFunc         func(*query.QueryOptions, []scope.QueryScope) (interface{}, error)
 	NextLinkFunc      func(*query.QueryOptions, interface{}) (*string, interface{}, error)
 	AfterRead         func(*query.QueryOptions, interface{}) (interface{}, bool, error)
 	WriteResponse     func(*query.QueryOptions, interface{}, *int64, *string) error
@@ -56,7 +56,7 @@ func (h *EntityHandler) executeCollectionQuery(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	var scopes []func(*gorm.DB) *gorm.DB
+	var scopes []scope.QueryScope
 	if ctx.BeforeRead != nil {
 		scopes, err = ctx.BeforeRead(queryOptions)
 		if !h.handleCollectionError(w, r, err, http.StatusForbidden, "Authorization failed") {

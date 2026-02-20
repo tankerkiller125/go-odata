@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,7 +60,7 @@ func (h *EntityHandler) handleDeleteEntity(w http.ResponseWriter, r *http.Reques
 		changeEvents []changeEvent
 	)
 
-	if err := h.runInTransaction(ctx, r, func(tx *gorm.DB, hookReq *http.Request) error {
+	if err := h.runInTransaction(ctx, r, func(sqlTx *sql.Tx, tx *gorm.DB, hookReq *http.Request) error {
 		fetched, err := h.fetchAndVerifyEntity(tx, entityKey, w, r)
 		if err != nil {
 			return newTransactionHandledError(err)
@@ -156,7 +157,7 @@ func (h *EntityHandler) handlePatchEntity(w http.ResponseWriter, r *http.Request
 		changeEvents []changeEvent
 	)
 
-	if err := h.runInTransaction(ctx, r, func(tx *gorm.DB, hookReq *http.Request) error {
+	if err := h.runInTransaction(ctx, r, func(sqlTx *sql.Tx, tx *gorm.DB, hookReq *http.Request) error {
 		entity = reflect.New(h.metadata.EntityType).Interface()
 
 		db, err := h.buildKeyQuery(tx, entityKey)
@@ -353,7 +354,7 @@ func (h *EntityHandler) handlePutEntity(w http.ResponseWriter, r *http.Request, 
 	var changeEvents []changeEvent
 
 	ctx := r.Context()
-	if err := h.runInTransaction(ctx, r, func(tx *gorm.DB, hookReq *http.Request) error {
+	if err := h.runInTransaction(ctx, r, func(sqlTx *sql.Tx, tx *gorm.DB, hookReq *http.Request) error {
 		entity := reflect.New(h.metadata.EntityType).Interface()
 
 		db, err := h.buildKeyQuery(tx, entityKey)
