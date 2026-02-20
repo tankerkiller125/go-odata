@@ -2,9 +2,8 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
-
-	"gorm.io/gorm"
 )
 
 // Context keys for request-scoped values
@@ -31,12 +30,12 @@ func GetTypeCast(ctx context.Context) string {
 }
 
 // withTransaction attaches the active transaction to the context for hook consumption.
-func withTransaction(ctx context.Context, tx *gorm.DB) context.Context {
+func withTransaction(ctx context.Context, tx *sql.Tx) context.Context {
 	return withTransactionAndEvents(ctx, tx, nil)
 }
 
 // withTransactionAndEvents attaches the active transaction and pending change collector to the context.
-func withTransactionAndEvents(ctx context.Context, tx *gorm.DB, events *[]pendingChangeEvent) context.Context {
+func withTransactionAndEvents(ctx context.Context, tx *sql.Tx, events *[]pendingChangeEvent) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -47,7 +46,7 @@ func withTransactionAndEvents(ctx context.Context, tx *gorm.DB, events *[]pendin
 }
 
 // requestWithTransaction returns a shallow copy of the request whose context includes the transaction.
-func requestWithTransaction(r *http.Request, tx *gorm.DB) *http.Request {
+func requestWithTransaction(r *http.Request, tx *sql.Tx) *http.Request {
 	if r == nil {
 		return nil
 	}
@@ -70,11 +69,11 @@ func addPendingChangeEvents(ctx context.Context, handler *EntityHandler, events 
 }
 
 // TransactionFromContext retrieves the active transaction stored for hook execution.
-func TransactionFromContext(ctx context.Context) (*gorm.DB, bool) {
+func TransactionFromContext(ctx context.Context) (*sql.Tx, bool) {
 	if ctx == nil {
 		return nil, false
 	}
-	tx, ok := ctx.Value(transactionDBKey).(*gorm.DB)
+	tx, ok := ctx.Value(transactionDBKey).(*sql.Tx)
 	if !ok || tx == nil {
 		return nil, false
 	}

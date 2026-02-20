@@ -10,6 +10,7 @@ import (
 
 	"github.com/nlstn/go-odata/internal/metadata"
 	"github.com/nlstn/go-odata/internal/query"
+	"github.com/nlstn/go-odata/internal/scope"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -28,18 +29,17 @@ type readHookChild struct {
 	Value            string `json:"Value"`
 }
 
-func tenantScopes(r *http.Request) ([]func(*gorm.DB) *gorm.DB, error) {
+func tenantScopes(r *http.Request) ([]scope.QueryScope, error) {
 	tenant := r.Header.Get("X-Tenant")
 	if tenant == "" {
 		return nil, fmt.Errorf("missing tenant")
 	}
-	scope := func(db *gorm.DB) *gorm.DB {
-		return db.Where("tenant = ?", tenant)
-	}
-	return []func(*gorm.DB) *gorm.DB{scope}, nil
+	return []scope.QueryScope{
+		{Condition: "tenant = ?", Args: []interface{}{tenant}},
+	}, nil
 }
 
-func (readHookEntity) ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
+func (readHookEntity) ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *query.QueryOptions) ([]scope.QueryScope, error) {
 	if r.Header.Get("X-Deny") == "collection" {
 		return nil, fmt.Errorf("collection denied")
 	}
@@ -53,7 +53,7 @@ func (readHookEntity) ODataAfterReadCollection(ctx context.Context, r *http.Requ
 	return nil, nil
 }
 
-func (readHookEntity) ODataBeforeReadEntity(ctx context.Context, r *http.Request, opts *query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
+func (readHookEntity) ODataBeforeReadEntity(ctx context.Context, r *http.Request, opts *query.QueryOptions) ([]scope.QueryScope, error) {
 	if r.Header.Get("X-Deny") == "entity" {
 		return nil, fmt.Errorf("entity denied")
 	}
@@ -70,7 +70,7 @@ func (readHookEntity) ODataAfterReadEntity(ctx context.Context, r *http.Request,
 	return nil, nil
 }
 
-func (readHookChild) ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
+func (readHookChild) ODataBeforeReadCollection(ctx context.Context, r *http.Request, opts *query.QueryOptions) ([]scope.QueryScope, error) {
 	return tenantScopes(r)
 }
 

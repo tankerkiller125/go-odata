@@ -10,11 +10,30 @@ import (
 	"github.com/nlstn/go-odata/internal/preference"
 	"github.com/nlstn/go-odata/internal/query"
 	"github.com/nlstn/go-odata/internal/response"
+	"github.com/nlstn/go-odata/internal/scope"
 	"github.com/nlstn/go-odata/internal/skiptoken"
 	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+// convertScopesToGORM converts scope.QueryScope values to GORM scope functions.
+// This is a temporary bridge during the migration from GORM to database/sql.
+func convertScopesToGORM(scopes []scope.QueryScope) []func(*gorm.DB) *gorm.DB {
+	if len(scopes) == 0 {
+		return nil
+	}
+
+	gormScopes := make([]func(*gorm.DB) *gorm.DB, len(scopes))
+	for i, s := range scopes {
+		// Capture the scope in the closure
+		scope := s
+		gormScopes[i] = func(db *gorm.DB) *gorm.DB {
+			return db.Where(scope.Condition, scope.Args...)
+		}
+	}
+	return gormScopes
+}
 
 func (h *EntityHandler) handleGetCollection(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -186,30 +205,29 @@ func (h *EntityHandler) parseCollectionQueryOptions(w http.ResponseWriter, r *ht
 	}
 }
 
-func (h *EntityHandler) beforeReadCollection(r *http.Request) func(*query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
-	return func(queryOptions *query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
+func (h *EntityHandler) beforeReadCollection(r *http.Request) func(*query.QueryOptions) ([]scope.QueryScope, error) {
+	return func(queryOptions *query.QueryOptions) ([]scope.QueryScope, error) {
 		scopes, err := callBeforeReadCollection(h.metadata, r, queryOptions)
 		if err != nil {
 			return nil, err
 		}
 
-		if typeCast := GetTypeCast(r.Context()); typeCast != "" {
-			if scope := h.buildTypeCastScope(typeCast); scope != nil {
-				scopes = append(scopes, scope)
-			}
-		}
+		// Note: Type cast scope is added later in fetchResultsWithTypeCast alongside
+		// the converted scopes before calling fetchResults
 
 		return scopes, nil
 	}
 }
 
-func (h *EntityHandler) collectionCountFunc(ctx context.Context) func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (*int64, error) {
-	return func(queryOptions *query.QueryOptions, scopes []func(*gorm.DB) *gorm.DB) (*int64, error) {
+func (h *EntityHandler) collectionCountFunc(ctx context.Context) func(*query.QueryOptions, []scope.QueryScope) (*int64, error) {
+	return func(queryOptions *query.QueryOptions, scopes []scope.QueryScope) (*int64, error) {
 		if !queryOptions.Count {
 			return nil, nil
 		}
 
-		count, err := h.countEntities(ctx, queryOptions, scopes)
+		// Convert scope.QueryScope to GORM scopes
+		gormScopes := convertScopesToGORM(scopes)
+		count, err := h.countEntities(ctx, queryOptions, gormScopes)
 		if err != nil {
 			return nil, err
 		}
@@ -358,10 +376,20 @@ func (h *EntityHandler) trimResults(sliceValue interface{}, maxLen int) interfac
 	return v.Slice(0, maxLen).Interface()
 }
 
-func (h *EntityHandler) fetchResultsWithTypeCast(r *http.Request) func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+func (h *EntityHandler) fetchResultsWithTypeCast(r *http.Request) func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
 	ctx := r.Context()
-	return func(queryOptions *query.QueryOptions, scopes []func(*gorm.DB) *gorm.DB) (interface{}, error) {
-		results, err := h.fetchResults(ctx, queryOptions, scopes)
+	return func(queryOptions *query.QueryOptions, scopes []scope.QueryScope) (interface{}, error) {
+		// Convert scope.QueryScope to GORM scopes
+		gormScopes := convertScopesToGORM(scopes)
+
+		// Add type cast scope if present
+		if typeCast := GetTypeCast(ctx); typeCast != "" {
+			if typeCastScope := h.buildTypeCastScope(typeCast); typeCastScope != nil {
+				gormScopes = append(gormScopes, typeCastScope)
+			}
+		}
+
+		results, err := h.fetchResults(ctx, queryOptions, gormScopes)
 		if err != nil {
 			return nil, err
 		}

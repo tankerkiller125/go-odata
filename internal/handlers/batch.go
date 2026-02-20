@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -662,7 +663,15 @@ func (h *BatchHandler) executeRequestInTransaction(req *batchRequest, tx *gorm.D
 		}
 	}
 
-	httpReq = httpReq.WithContext(withTransactionAndEvents(ctx, tx, pendingEvents))
+	// Extract *sql.Tx from GORM transaction for the context
+	var sqlTx *sql.Tx
+	if tx != nil && tx.Statement != nil && tx.Statement.ConnPool != nil {
+		if extracted, ok := tx.Statement.ConnPool.(*sql.Tx); ok {
+			sqlTx = extracted
+		}
+	}
+	
+	httpReq = httpReq.WithContext(withTransactionAndEvents(ctx, sqlTx, pendingEvents))
 
 	// Execute request
 	recorder := httptest.NewRecorder()

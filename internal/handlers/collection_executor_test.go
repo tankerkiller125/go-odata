@@ -11,7 +11,7 @@ import (
 	"github.com/nlstn/go-odata/internal/hookerrors"
 	"github.com/nlstn/go-odata/internal/metadata"
 	"github.com/nlstn/go-odata/internal/query"
-	"gorm.io/gorm"
+	"github.com/nlstn/go-odata/internal/scope"
 )
 
 type odataErrorResponse struct {
@@ -46,7 +46,7 @@ func TestExecuteCollectionQueryErrors(t *testing.T) {
 			ParseQueryOptions: func() (*query.QueryOptions, error) {
 				return nil, errRequestHandled
 			},
-			FetchFunc: func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+			FetchFunc: func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
 				t.Fatal("FetchFunc should not be called")
 				return nil, nil
 			},
@@ -73,7 +73,7 @@ func TestExecuteCollectionQueryErrors(t *testing.T) {
 			ParseQueryOptions: func() (*query.QueryOptions, error) {
 				return nil, &GeospatialNotEnabledError{}
 			},
-			FetchFunc: func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+			FetchFunc: func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
 				t.Fatal("FetchFunc should not be called")
 				return nil, nil
 			},
@@ -111,7 +111,7 @@ func TestExecuteCollectionQueryErrors(t *testing.T) {
 					Err:        errors.New("hook detail"),
 				}
 			},
-			FetchFunc: func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+			FetchFunc: func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
 				t.Fatal("FetchFunc should not be called")
 				return nil, nil
 			},
@@ -145,7 +145,7 @@ func TestExecuteCollectionQueryErrors(t *testing.T) {
 			ParseQueryOptions: func() (*query.QueryOptions, error) {
 				return nil, &collectionRequestError{Message: "request failed"}
 			},
-			FetchFunc: func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+			FetchFunc: func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
 				t.Fatal("FetchFunc should not be called")
 				return nil, nil
 			},
@@ -183,7 +183,7 @@ func TestExecuteCollectionQueryErrors(t *testing.T) {
 					Message:    "custom detail",
 				}
 			},
-			FetchFunc: func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+			FetchFunc: func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
 				t.Fatal("FetchFunc should not be called")
 				return nil, nil
 			},
@@ -218,7 +218,7 @@ func TestExecuteCollectionQueryErrors(t *testing.T) {
 			ParseQueryOptions: func() (*query.QueryOptions, error) {
 				return queryOptions, nil
 			},
-			FetchFunc: func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+			FetchFunc: func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
 				return nil, errors.New("fetch failed")
 			},
 			WriteResponse: func(*query.QueryOptions, interface{}, *int64, *string) error {
@@ -262,14 +262,14 @@ func TestExecuteCollectionQueryHappyPath(t *testing.T) {
 			callOrder = append(callOrder, "ParseQueryOptions")
 			return queryOptions, nil
 		},
-		BeforeRead: func(opts *query.QueryOptions) ([]func(*gorm.DB) *gorm.DB, error) {
+		BeforeRead: func(opts *query.QueryOptions) ([]scope.QueryScope, error) {
 			callOrder = append(callOrder, "BeforeRead")
 			if opts != queryOptions {
 				t.Fatalf("expected query options to match")
 			}
-			return []func(*gorm.DB) *gorm.DB{func(db *gorm.DB) *gorm.DB { return db }}, nil
+			return []scope.QueryScope{{Condition: "1 = 1"}}, nil
 		},
-		CountFunc: func(opts *query.QueryOptions, scopes []func(*gorm.DB) *gorm.DB) (*int64, error) {
+		CountFunc: func(opts *query.QueryOptions, scopes []scope.QueryScope) (*int64, error) {
 			callOrder = append(callOrder, "CountFunc")
 			if opts != queryOptions {
 				t.Fatalf("expected query options to match")
@@ -279,7 +279,7 @@ func TestExecuteCollectionQueryHappyPath(t *testing.T) {
 			}
 			return &count, nil
 		},
-		FetchFunc: func(opts *query.QueryOptions, scopes []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+		FetchFunc: func(opts *query.QueryOptions, scopes []scope.QueryScope) (interface{}, error) {
 			callOrder = append(callOrder, "FetchFunc")
 			if opts != queryOptions {
 				t.Fatalf("expected query options to match")
@@ -376,7 +376,7 @@ func TestExecuteCollectionQuery_MissingCallbacks(t *testing.T) {
 
 		handler.executeCollectionQuery(recorder, request, &collectionExecutionContext{
 			ParseQueryOptions: nil,
-			FetchFunc: func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+			FetchFunc: func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
 				return nil, nil
 			},
 			WriteResponse: func(*query.QueryOptions, interface{}, *int64, *string) error {
@@ -432,7 +432,7 @@ func TestExecuteCollectionQuery_MissingCallbacks(t *testing.T) {
 			ParseQueryOptions: func() (*query.QueryOptions, error) {
 				return &query.QueryOptions{}, nil
 			},
-			FetchFunc: func(*query.QueryOptions, []func(*gorm.DB) *gorm.DB) (interface{}, error) {
+			FetchFunc: func(*query.QueryOptions, []scope.QueryScope) (interface{}, error) {
 				return nil, nil
 			},
 			WriteResponse: nil,
